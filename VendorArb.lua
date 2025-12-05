@@ -233,10 +233,20 @@ local function UpdateResultsList()
     for i, row in ipairs(resultRows) do
         if i <= numResults then
             local r = results[i]
-            row.link = r.link
+            
+            -- Get itemID from link or stored value
+            local itemID = r.itemID or GetItemIDFromLink(r.link)
+            
+            -- Try to get/refresh the link from itemID if we don't have it
+            local link = r.link
+            if not link and itemID then
+                local _, itemLink = GetItemInfo(itemID)
+                link = itemLink
+                r.link = link  -- cache it
+            end
+            row.link = link
             
             -- Set item icon
-            local itemID = GetItemIDFromLink(r.link)
             if itemID then
                 local iconTexture = GetItemIcon(itemID)
                 if iconTexture then
@@ -244,7 +254,7 @@ local function UpdateResultsList()
                 end
             end
             
-            row.itemText:SetText(r.link or r.name)
+            row.itemText:SetText(link or r.name)
             row.countText:SetText(r.count .. " stack of 1")
             row.vendorText:SetText(FormatMoneyIcons(r.vendorCost))
             row.ahText:SetText(FormatMoneyIcons(r.ahPrice))
@@ -617,6 +627,24 @@ local function FinishScan()
 
     -- Update the results list in the UI
     UpdateResultsList()
+
+    -- Save results to SavedVariables (store itemID instead of link, since links don't serialize)
+    VendorArbDB = VendorArbDB or {}
+    VendorArbDB.results = {}
+    for _, r in ipairs(scanner.results) do
+        local itemID = GetItemIDFromLink(r.link)
+        table.insert(VendorArbDB.results, {
+            itemID = itemID,
+            name = r.name,
+            count = r.count,
+            vendorCost = r.vendorCost,
+            ahPrice = r.ahPrice,
+            profit = r.profit,
+            roi = r.roi,
+        })
+    end
+    VendorArbDB.lastScan = date("%Y-%m-%d %H:%M:%S")
+    print(ADDON_PREFIX, "Results saved.")
 end
 
 -----------------------------------------------------------------------
@@ -631,7 +659,27 @@ scanFrame:Hide()
 scanFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
         local name = ...
-        if name == "Blizzard_AuctionUI" then
+        if name == "VendorArb" then
+            VendorArbDB = VendorArbDB or { results = {}, lastScan = nil }
+            -- Restore saved results (reconstruct links from itemIDs)
+            if VendorArbDB.results and #VendorArbDB.results > 0 then
+                scanner.results = {}
+                for _, r in ipairs(VendorArbDB.results) do
+                    local _, link = GetItemInfo(r.itemID)
+                    table.insert(scanner.results, {
+                        name = r.name,
+                        link = link,  -- may be nil until item is cached
+                        itemID = r.itemID,
+                        count = r.count,
+                        vendorCost = r.vendorCost,
+                        ahPrice = r.ahPrice,
+                        profit = r.profit,
+                        roi = r.roi,
+                    })
+                end
+                print(ADDON_PREFIX, "Loaded", #scanner.results, "saved results from", VendorArbDB.lastScan or "unknown")
+            end
+        elseif name == "Blizzard_AuctionUI" then
             CreateVendorArbTab()
         end
 
