@@ -353,7 +353,7 @@ local function UpdateResultsList()
             end
             
             row.itemText:SetText(r.link or r.name)
-            row.countText:SetText(r.count .. " stack of 1")
+            row.countText:SetText("per unit")
             row.vendorText:SetText(FormatMoneyIcons(r.vendorCost))
             row.ahText:SetText(FormatMoneyIcons(r.ahPrice))
             row.profitText:SetText(FormatMoneyIcons(r.profit))
@@ -467,9 +467,9 @@ local function CreateVendorArbPanel()
     
     local headers = {
         { text = "Name", offset = 5, width = 220, sortKey = nil },
-        { text = "Quantity", offset = 230, width = 75, sortKey = nil },
+        { text = "Pricing", offset = 230, width = 75, sortKey = nil },
         { text = "Vendor Cost", offset = 310, width = 125, sortKey = "vendorCost" },
-        { text = "AH Price", offset = 440, width = 125, sortKey = "ahPrice" },
+        { text = "Min AH Price", offset = 440, width = 125, sortKey = "ahPrice" },
         { text = "Profit", offset = 570, width = 125, sortKey = "profit" },
         { text = "ROI", offset = 700, width = 70, sortKey = "roi" },
     }
@@ -694,7 +694,10 @@ end
 
 -----------------------------------------------------------------------
 -- Core: Scan current AH page for vendor items
+-- Track the lowest price per unit for each vendor item
 -----------------------------------------------------------------------
+local lowestPrices = {}  -- itemID -> { pricePerUnit, name, link }
+
 local function ProcessCurrentPage()
     local numBatchAuctions, totalAuctions = GetNumAuctionItems("list")
     if totalAuctions == 0 or numBatchAuctions == 0 then
@@ -715,25 +718,16 @@ local function ProcessCurrentPage()
                 scanner.vendorItemsFound = scanner.vendorItemsFound + 1
                 foundOnPage = foundOnPage + 1
 
-                local vendorBuyCost = VENDOR_PRICES[itemID] * count  -- Total cost to buy from vendor
-                local ahBuyout = buyoutPrice                         -- Current AH price (per stack)
+                -- Calculate price per unit for this listing
+                local pricePerUnit = buyoutPrice / count
                 
-                -- Calculate profit: sell at current AH price minus AH cut, compare to vendor cost
-                local ahFee = math.floor(ahBuyout * AH_CUT)
-                local netFromSale = ahBuyout - ahFee
-                local profit = netFromSale - vendorBuyCost
-                local roi = vendorBuyCost > 0 and (profit / vendorBuyCost) or 0
-
-                if profit >= MIN_PROFIT_COPPER then
-                    table.insert(scanner.results, {
+                -- Track the lowest price per unit for this item
+                if not lowestPrices[itemID] or pricePerUnit < lowestPrices[itemID].pricePerUnit then
+                    lowestPrices[itemID] = {
+                        pricePerUnit = pricePerUnit,
                         name = name,
                         link = itemLink,
-                        count = count,
-                        vendorCost = vendorBuyCost,
-                        ahPrice = ahBuyout,
-                        profit = profit,
-                        roi = roi,
-                    })
+                    }
                 end
             end
         end
@@ -743,7 +737,7 @@ local function ProcessCurrentPage()
 end
 
 -----------------------------------------------------------------------
--- Finish scan: deduplicate and display results
+-- Finish scan: calculate profits using lowest prices and display
 -----------------------------------------------------------------------
 local function FinishScan()
     scanner.running = false
@@ -751,6 +745,31 @@ local function FinishScan()
     -- Update progress
     if VendorArbProgressBar then VendorArbProgressBar:SetValue(1) end
     if VendorArbProgressText then VendorArbProgressText:SetText("100%") end
+
+    -- Convert lowest prices to results with profit calculations
+    scanner.results = {}
+    for itemID, data in pairs(lowestPrices) do
+        local vendorCost = VENDOR_PRICES[itemID]  -- Cost per unit from vendor
+        local ahPrice = data.pricePerUnit         -- Lowest AH price per unit
+        
+        -- Calculate profit: sell at lowest AH price minus AH cut, compare to vendor cost
+        local ahFee = math.floor(ahPrice * AH_CUT)
+        local netFromSale = ahPrice - ahFee
+        local profit = netFromSale - vendorCost
+        local roi = vendorCost > 0 and (profit / vendorCost) or 0
+
+        if profit >= MIN_PROFIT_COPPER then
+            table.insert(scanner.results, {
+                name = data.name,
+                link = data.link,
+                count = 1,  -- Normalized to per-unit
+                vendorCost = vendorCost,
+                ahPrice = math.floor(ahPrice),
+                profit = math.floor(profit),
+                roi = roi,
+            })
+        end
+    end
 
     print(string.format(
         "%s Scan complete: %d auctions checked, %d vendor items found, %d profitable",
@@ -767,19 +786,6 @@ local function FinishScan()
         UpdateResultsList()
         return
     end
-
-    -- Remove duplicates (keep best profit per item, sort first to ensure best is kept)
-    table.sort(scanner.results, function(a, b) return a.profit > b.profit end)
-    local seen = {}
-    local unique = {}
-    for _, r in ipairs(scanner.results) do
-        local itemID = GetItemIDFromLink(r.link)
-        if itemID and not seen[itemID] then
-            seen[itemID] = true
-            table.insert(unique, r)
-        end
-    end
-    scanner.results = unique
 
     if VendorArbStatus then
         VendorArbStatus:SetText(string.format(
@@ -830,12 +836,16 @@ scanFrame:SetScript("OnEvent", function(self, event, ...)
         local progress = totalScanPages > 0 and ((scanPage + 1) / (totalScanPages + 1)) or 0.5
         if VendorArbProgressBar then VendorArbProgressBar:SetValue(progress) end
         if VendorArbProgressText then VendorArbProgressText:SetText(string.format("%d%%", math.floor(progress * 100))) end
+        -- Count unique items found so far
+        local uniqueCount = 0
+        for _ in pairs(lowestPrices) do uniqueCount = uniqueCount + 1 end
+        
         if VendorArbStatus then
             VendorArbStatus:SetText(string.format(
-                "Scanning page %d/%d... Found %d profitable so far",
+                "Scanning page %d/%d... Found %d unique vendor items",
                 scanPage + 1,
                 totalScanPages + 1,
-                #scanner.results
+                uniqueCount
             ))
         end
 
@@ -894,6 +904,7 @@ StartScan = function()
     scanner.results = {}
     scanner.itemsChecked = 0
     scanner.vendorItemsFound = 0
+    lowestPrices = {}  -- Reset lowest price tracking
     scanPage = 0
     totalScanPages = 0
 
