@@ -100,6 +100,7 @@ local VendorArbPanel = nil
 local VendorArbStatus = nil
 local VendorArbProgressBar = nil
 local VendorArbProgressText = nil
+local VendorArbTitleText = nil
 
 -----------------------------------------------------------------------
 -- Create the panel UI
@@ -109,16 +110,17 @@ local function CreateVendorArbPanel()
     if not AuctionFrame then return end
 
     local f = CreateFrame("Frame", "VendorArbPanel", AuctionFrame)
-    f:SetAllPoints(AuctionFrame)
+    f:SetPoint("TOPLEFT", AuctionFrame, "TOPLEFT", 0, -56)
+    f:SetPoint("BOTTOMRIGHT", AuctionFrame, "BOTTOMRIGHT", 0, 0)
     f:Hide()
     VendorArbPanel = f
 
     local bg = f:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints(f)
-    bg:SetColorTexture(0, 0, 0, 0.25)
+    bg:SetColorTexture(0, 0, 0, 0.5)
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    title:SetPoint("TOPLEFT", 20, -40)
+    title:SetPoint("TOPLEFT", 20, -10)
     title:SetText("Vendor -> AH Arbitrage Finder")
 
     local desc = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -202,12 +204,19 @@ local function CreateVendorArbTab()
     PanelTemplates_SetNumTabs(auctionFrame, vendorArbTabID)
     PanelTemplates_EnableTab(auctionFrame, vendorArbTabID)
 
+    -- Create custom title bar text
+    VendorArbTitleText = AuctionFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    VendorArbTitleText:SetPoint("TOP", AuctionFrame, "TOP", 0, -18)
+    VendorArbTitleText:SetText("VendorArb")
+    VendorArbTitleText:Hide()
+
     tab:SetScript("OnClick", function(self)
         PanelTemplates_SetTab(auctionFrame, vendorArbTabID)
         if AuctionFrameBrowse then AuctionFrameBrowse:Hide() end
         if AuctionFrameBid then AuctionFrameBid:Hide() end
         if AuctionFrameAuctions then AuctionFrameAuctions:Hide() end
         if VendorArbPanel then VendorArbPanel:Show() end
+        if VendorArbTitleText then VendorArbTitleText:Show() end
         PlaySound(SOUNDKIT.IG_CHARACTER_INFO_TAB)
     end)
 
@@ -215,6 +224,7 @@ local function CreateVendorArbTab()
         local id = index or (self and self.GetID and self:GetID())
         if VendorArbPanel and id ~= vendorArbTabID then
             VendorArbPanel:Hide()
+            if VendorArbTitleText then VendorArbTitleText:Hide() end
         end
     end)
 end
