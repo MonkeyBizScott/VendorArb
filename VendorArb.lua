@@ -270,10 +270,29 @@ local function CreateVendorArbPanel()
     local f = CreateFrame("Frame", "VendorArbPanel", AuctionFrame)
     f:SetPoint("TOPLEFT", AuctionFrame, "TOPLEFT", 0, -56)
     f:SetPoint("BOTTOMRIGHT", AuctionFrame, "BOTTOMRIGHT", 0, 0)
+    f:SetFrameLevel(AuctionFrame:GetFrameLevel() + 10)  -- Ensure we're above other content
     f:Hide()
     VendorArbPanel = f
 
-    -- No background needed - AuctionFrame parent provides it
+    -- Use AH-style marble background texture (tiled)
+    local bg = f:CreateTexture(nil, "BACKGROUND", nil, -8)
+    bg:SetAllPoints(f)
+    bg:SetTexture("Interface\\FrameGeneral\\UI-Background-Marble", "REPEAT", "REPEAT")
+    bg:SetHorizTile(true)
+    bg:SetVertTile(true)
+    
+    -- Update texture coords when frame resizes to tile properly
+    f:SetScript("OnSizeChanged", function(self, width, height)
+        local tileSize = 256  -- Standard texture size
+        bg:SetTexCoord(0, width/tileSize, 0, height/tileSize)
+    end)
+    -- Initial sizing
+    C_Timer.After(0, function()
+        local width, height = f:GetSize()
+        if width > 0 and height > 0 then
+            bg:SetTexCoord(0, width/256, 0, height/256)
+        end
+    end)
 
     -- Status text at top
     local status = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -408,30 +427,90 @@ local function CreateVendorArbTab()
 
     tab:SetScript("OnClick", function(self)
         PanelTemplates_SetTab(auctionFrame, vendorArbTabID)
+        
         -- Hide all standard AH frames
         if AuctionFrameBrowse then AuctionFrameBrowse:Hide() end
         if AuctionFrameBid then AuctionFrameBid:Hide() end
         if AuctionFrameAuctions then AuctionFrameAuctions:Hide() end
-        -- Hide any other addon panels that might be visible
-        for i = 1, 20 do
-            local otherPanel = _G["AuctionFrameTab" .. i .. "Panel"]
-            if otherPanel and otherPanel ~= VendorArbPanel then
-                otherPanel:Hide()
+        
+        -- Hide Auctionator frames if present
+        if AuctionatorShoppingFrame then AuctionatorShoppingFrame:Hide() end
+        if AuctionatorSellingFrame then AuctionatorSellingFrame:Hide() end
+        if AuctionatorCancellingFrame then AuctionatorCancellingFrame:Hide() end
+        if AuctionatorConfigFrame then AuctionatorConfigFrame:Hide() end
+        
+        -- Hide any children of AuctionFrame that look like content panels
+        for _, child in ipairs({AuctionFrame:GetChildren()}) do
+            if child ~= VendorArbPanel and child.Hide and child:IsShown() then
+                local name = child:GetName()
+                -- Hide unnamed frames or frames that look like content panels
+                if not name or (name and (name:find("Frame") or name:find("Panel"))) then
+                    -- Don't hide tabs, title, portrait, or our own panel
+                    if not name or (not name:find("Tab") and not name:find("Portrait") and not name:find("Title")) then
+                        child:Hide()
+                    end
+                end
             end
         end
+        
         if VendorArbPanel then 
             VendorArbPanel:Show()
-            UpdateResultsList()  -- Refresh the results display
+            UpdateResultsList()
         end
         if VendorArbTitleText then VendorArbTitleText:Show() end
         PlaySound(SOUNDKIT.IG_CHARACTER_INFO_TAB)
     end)
 
+    -- Function to hide our panel
+    local function HideVendorArbPanel()
+        if VendorArbPanel then VendorArbPanel:Hide() end
+        if VendorArbTitleText then VendorArbTitleText:Hide() end
+    end
+
+    -- Hook the standard Blizzard AH tabs directly
+    for i = 1, 3 do
+        local blizzTab = _G["AuctionFrameTab" .. i]
+        if blizzTab then
+            blizzTab:HookScript("OnClick", HideVendorArbPanel)
+        end
+    end
+    
+    -- Hook OnShow for the standard AH frames - when they show, hide our panel
+    if AuctionFrameBrowse then
+        AuctionFrameBrowse:HookScript("OnShow", HideVendorArbPanel)
+    end
+    if AuctionFrameBid then
+        AuctionFrameBid:HookScript("OnShow", HideVendorArbPanel)
+    end
+    if AuctionFrameAuctions then
+        AuctionFrameAuctions:HookScript("OnShow", HideVendorArbPanel)
+    end
+    
+    -- Hook to hide our panel when other tabs are clicked (for addon tabs)
     hooksecurefunc("AuctionFrameTab_OnClick", function(self, index)
         local id = index or (self and self.GetID and self:GetID())
-        if VendorArbPanel and id ~= vendorArbTabID then
-            VendorArbPanel:Hide()
-            if VendorArbTitleText then VendorArbTitleText:Hide() end
+        if id ~= vendorArbTabID then
+            HideVendorArbPanel()
+        end
+    end)
+    
+    -- Also hook PanelTemplates_SetTab for addons that use it directly
+    hooksecurefunc("PanelTemplates_SetTab", function(frame, id)
+        if frame == AuctionFrame and id ~= vendorArbTabID then
+            HideVendorArbPanel()
+        end
+    end)
+    
+    -- Hook any future tabs that get added
+    hooksecurefunc("PanelTemplates_SetNumTabs", function(frame, numTabs)
+        if frame == AuctionFrame then
+            for i = 1, numTabs do
+                local otherTab = _G["AuctionFrameTab" .. i]
+                if otherTab and i ~= vendorArbTabID and not otherTab.vendorArbHooked then
+                    otherTab:HookScript("OnClick", HideVendorArbPanel)
+                    otherTab.vendorArbHooked = true
+                end
+            end
         end
     end)
 end
