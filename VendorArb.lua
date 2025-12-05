@@ -130,7 +130,45 @@ local VendorArbTitleText = nil
 local VendorArbScanButton = nil
 local VendorArbResultsScrollFrame = nil
 local VendorArbResultsContent = nil
+local VendorArbPrevButton = nil
+local VendorArbNextButton = nil
+local VendorArbPageText = nil
 local resultRows = {}
+
+-- Pagination state
+local RESULTS_PER_PAGE = 15
+local currentPage = 1
+
+-- Sorting state
+local sortColumn = "profit"  -- default sort
+local sortAscending = false  -- default descending (best first)
+
+local function SortResults()
+    if #scanner.results == 0 then return end
+    
+    table.sort(scanner.results, function(a, b)
+        local valA, valB
+        if sortColumn == "vendorCost" then
+            valA, valB = a.vendorCost or 0, b.vendorCost or 0
+        elseif sortColumn == "ahPrice" then
+            valA, valB = a.ahPrice or 0, b.ahPrice or 0
+        elseif sortColumn == "profit" then
+            valA, valB = a.profit or 0, b.profit or 0
+        elseif sortColumn == "roi" then
+            valA, valB = a.roi or 0, b.roi or 0
+        else
+            return false
+        end
+        
+        if sortAscending then
+            return valA < valB
+        else
+            return valA > valB
+        end
+    end)
+    
+    currentPage = 1  -- Reset to first page after sort
+end
 
 -----------------------------------------------------------------------
 -- Create a result row
@@ -223,16 +261,30 @@ local function UpdateResultsList()
 
     local results = scanner.results
     local numResults = #results
+    local totalPages = math.max(1, math.ceil(numResults / RESULTS_PER_PAGE))
+    
+    -- Clamp current page
+    if currentPage > totalPages then currentPage = totalPages end
+    if currentPage < 1 then currentPage = 1 end
+    
+    -- Calculate which results to show
+    local startIdx = (currentPage - 1) * RESULTS_PER_PAGE + 1
+    local endIdx = math.min(currentPage * RESULTS_PER_PAGE, numResults)
+    local rowsToShow = endIdx - startIdx + 1
+    if numResults == 0 then rowsToShow = 0 end
 
-    -- Ensure we have enough rows
-    for i = #resultRows + 1, numResults do
+    -- Ensure we have enough rows for one page
+    for i = #resultRows + 1, RESULTS_PER_PAGE do
         resultRows[i] = CreateResultRow(VendorArbResultsContent, i)
     end
 
     -- Update row data
-    for i, row in ipairs(resultRows) do
-        if i <= numResults then
-            local r = results[i]
+    for i = 1, RESULTS_PER_PAGE do
+        local row = resultRows[i]
+        local resultIdx = startIdx + i - 1
+        
+        if resultIdx <= numResults then
+            local r = results[resultIdx]
             
             -- Get itemID from link or stored value
             local itemID = r.itemID or GetItemIDFromLink(r.link)
@@ -267,7 +319,33 @@ local function UpdateResultsList()
     end
 
     -- Update scroll content height
-    VendorArbResultsContent:SetHeight(math.max(1, numResults * ROW_HEIGHT))
+    VendorArbResultsContent:SetHeight(math.max(1, rowsToShow * ROW_HEIGHT))
+    
+    -- Update pagination controls
+    if VendorArbPageText then
+        VendorArbPageText:SetText(string.format("Page %d of %d  (%d results)", currentPage, totalPages, numResults))
+    end
+    if VendorArbPrevButton then
+        VendorArbPrevButton:SetEnabled(currentPage > 1)
+    end
+    if VendorArbNextButton then
+        VendorArbNextButton:SetEnabled(currentPage < totalPages)
+    end
+end
+
+local function PrevPage()
+    if currentPage > 1 then
+        currentPage = currentPage - 1
+        UpdateResultsList()
+    end
+end
+
+local function NextPage()
+    local totalPages = math.max(1, math.ceil(#scanner.results / RESULTS_PER_PAGE))
+    if currentPage < totalPages then
+        currentPage = currentPage + 1
+        UpdateResultsList()
+    end
 end
 
 -----------------------------------------------------------------------
@@ -362,25 +440,78 @@ local function CreateVendorArbPanel()
     headerBg:SetColorTexture(0.2, 0.2, 0.2, 0.8)
 
     local headers = {
-        { text = "Name", offset = 5 },
-        { text = "Quantity", offset = 230 },
-        { text = "Vendor Cost", offset = 310 },
-        { text = "AH Price", offset = 440 },
-        { text = "Profit", offset = 570 },
-        { text = "ROI", offset = 700 },
+        { text = "Name", offset = 5, width = 200, sortKey = nil },
+        { text = "Qty", offset = 230, width = 70, sortKey = nil },
+        { text = "Vendor Cost", offset = 310, width = 120, sortKey = "vendorCost" },
+        { text = "AH Price", offset = 440, width = 120, sortKey = "ahPrice" },
+        { text = "Profit", offset = 570, width = 120, sortKey = "profit" },
+        { text = "ROI", offset = 700, width = 60, sortKey = "roi" },
     }
+    
+    f.headerButtons = {}
 
     for _, h in ipairs(headers) do
-        local headerText = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        headerText:SetPoint("LEFT", headerFrame, "LEFT", h.offset, 0)
-        headerText:SetText(h.text)
-        headerText:SetTextColor(1, 0.82, 0)
+        if h.sortKey then
+            -- Sortable column - create a button
+            local btn = CreateFrame("Button", nil, headerFrame)
+            btn:SetPoint("LEFT", headerFrame, "LEFT", h.offset, 0)
+            btn:SetSize(h.width, 20)
+            
+            local btnText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            btnText:SetPoint("LEFT", 0, 0)
+            btnText:SetText(h.text)
+            btnText:SetTextColor(1, 0.82, 0)
+            btn.text = btnText
+            btn.sortKey = h.sortKey
+            btn.baseText = h.text
+            
+            btn:SetScript("OnClick", function(self)
+                if sortColumn == self.sortKey then
+                    sortAscending = not sortAscending
+                else
+                    sortColumn = self.sortKey
+                    sortAscending = false  -- Default to descending for new column
+                end
+                SortResults()
+                UpdateResultsList()
+                -- Update header indicators
+                for _, b in pairs(f.headerButtons) do
+                    if b.sortKey == sortColumn then
+                        local arrow = sortAscending and " ^" or " v"
+                        b.text:SetText(b.baseText .. arrow)
+                    else
+                        b.text:SetText(b.baseText)
+                    end
+                end
+            end)
+            
+            btn:SetScript("OnEnter", function(self)
+                self.text:SetTextColor(1, 1, 1)
+            end)
+            btn:SetScript("OnLeave", function(self)
+                self.text:SetTextColor(1, 0.82, 0)
+            end)
+            
+            f.headerButtons[h.sortKey] = btn
+            
+            -- Set initial indicator for default sort
+            if h.sortKey == sortColumn then
+                local arrow = sortAscending and " ^" or " v"
+                btnText:SetText(h.text .. arrow)
+            end
+        else
+            -- Non-sortable column - just text
+            local headerText = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            headerText:SetPoint("LEFT", headerFrame, "LEFT", h.offset, 0)
+            headerText:SetText(h.text)
+            headerText:SetTextColor(1, 0.82, 0)
+        end
     end
 
     -- Scrollable results area
     local scrollFrame = CreateFrame("ScrollFrame", "VendorArbScrollFrame", f, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", headerFrame, "BOTTOMLEFT", 0, -2)
-    scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -30, 10)
+    scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -30, 40)
     VendorArbResultsScrollFrame = scrollFrame
 
     local scrollContent = CreateFrame("Frame", "VendorArbScrollContent", scrollFrame)
@@ -393,6 +524,26 @@ local function CreateVendorArbPanel()
     scrollFrame:SetScript("OnSizeChanged", function(self, width, height)
         scrollContent:SetWidth(width - 20)
     end)
+    
+    -- Pagination controls at bottom
+    local prevBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    prevBtn:SetSize(80, 22)
+    prevBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 10)
+    prevBtn:SetText("< Prev")
+    prevBtn:SetScript("OnClick", PrevPage)
+    VendorArbPrevButton = prevBtn
+    
+    local nextBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    nextBtn:SetSize(80, 22)
+    nextBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -40, 10)
+    nextBtn:SetText("Next >")
+    nextBtn:SetScript("OnClick", NextPage)
+    VendorArbNextButton = nextBtn
+    
+    local pageText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    pageText:SetPoint("BOTTOM", f, "BOTTOM", 0, 15)
+    pageText:SetText("Page 1 of 1  (0 results)")
+    VendorArbPageText = pageText
 end
 
 -----------------------------------------------------------------------
@@ -601,7 +752,7 @@ local function FinishScan()
         return
     end
 
-    -- Sort by profit descending
+    -- Sort by profit descending first (to keep best profit per item during dedup)
     table.sort(scanner.results, function(a, b)
         return a.profit > b.profit
     end)
@@ -617,6 +768,9 @@ local function FinishScan()
         end
     end
     scanner.results = unique
+    
+    -- Apply user's current sort preference
+    SortResults()
 
     if VendorArbStatus then
         VendorArbStatus:SetText(string.format(
@@ -677,6 +831,7 @@ scanFrame:SetScript("OnEvent", function(self, event, ...)
                         roi = r.roi,
                     })
                 end
+                SortResults()
                 print(ADDON_PREFIX, "Loaded", #scanner.results, "saved results from", VendorArbDB.lastScan or "unknown")
             end
         elseif name == "Blizzard_AuctionUI" then
@@ -765,6 +920,7 @@ StartScan = function()
     scanner.vendorItemsFound = 0
     scanPage = 0
     totalScanPages = 0
+    currentPage = 1
 
     if VendorArbProgressBar then VendorArbProgressBar:SetValue(0) end
     if VendorArbProgressText then VendorArbProgressText:SetText("0%") end
