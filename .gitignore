@@ -1,0 +1,6 @@
+# Ignore JSON data files (Lua version is committed)
+VendorData.json
+
+# OS files
+.DS_Store
+Thumbs.db

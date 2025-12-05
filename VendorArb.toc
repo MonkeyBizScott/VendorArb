@@ -1,0 +1,8 @@
+## Interface: 11505
+## Title: Vendor Arbitrage Finder
+## Notes: Finds vendor->AH arbitrage opportunities (buy from vendor, sell on AH for profit)
+## Author: You
+## Version: 0.2
+
+VendorPrices.lua
+VendorArb.lua
