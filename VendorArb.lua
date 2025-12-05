@@ -33,6 +33,32 @@ local function FormatMoney(copper)
     return negative and ("-" .. str) or str
 end
 
+-- Format money with currency icons
+local GOLD_ICON = "|TInterface\\MoneyFrame\\UI-GoldIcon:0|t"
+local SILVER_ICON = "|TInterface\\MoneyFrame\\UI-SilverIcon:0|t"
+local COPPER_ICON = "|TInterface\\MoneyFrame\\UI-CopperIcon:0|t"
+
+local function FormatMoneyIcons(copper)
+    copper = copper or 0
+    local negative = copper < 0
+    copper = math.abs(copper)
+    local gold = math.floor(copper / 10000)
+    local silver = math.floor((copper % 10000) / 100)
+    local bronze = copper % 100
+
+    local parts = {}
+    if gold > 0 then
+        table.insert(parts, gold .. GOLD_ICON)
+    end
+    if silver > 0 or gold > 0 then
+        table.insert(parts, silver .. SILVER_ICON)
+    end
+    table.insert(parts, bronze .. COPPER_ICON)
+    
+    local str = table.concat(parts, " ")
+    return negative and ("-" .. str) or str
+end
+
 -- Extract itemID from an item link
 local function GetItemIDFromLink(itemLink)
     if not itemLink then return nil end
@@ -100,6 +126,139 @@ local VendorArbPanel = nil
 local VendorArbStatus = nil
 local VendorArbProgressBar = nil
 local VendorArbProgressText = nil
+local VendorArbTitleText = nil
+local VendorArbScanButton = nil
+local VendorArbResultsScrollFrame = nil
+local VendorArbResultsContent = nil
+local resultRows = {}
+
+-----------------------------------------------------------------------
+-- Create a result row
+-----------------------------------------------------------------------
+local ROW_HEIGHT = 20
+
+local function CreateResultRow(parent, index)
+    local row = CreateFrame("Button", nil, parent)
+    row:SetHeight(ROW_HEIGHT)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * ROW_HEIGHT))
+    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * ROW_HEIGHT))
+
+    -- Alternating background
+    local bg = row:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    if index % 2 == 0 then
+        bg:SetColorTexture(0.15, 0.15, 0.15, 0.8)
+    else
+        bg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+    end
+
+    -- Highlight on hover
+    local highlight = row:CreateTexture(nil, "HIGHLIGHT")
+    highlight:SetAllPoints()
+    highlight:SetColorTexture(0.3, 0.3, 0.0, 0.3)
+
+    -- Item icon
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(ROW_HEIGHT - 2, ROW_HEIGHT - 2)
+    row.icon:SetPoint("LEFT", 2, 0)
+
+    -- Item name/link (after icon)
+    row.itemText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.itemText:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
+    row.itemText:SetWidth(200)
+    row.itemText:SetJustifyH("LEFT")
+
+    -- Count/Quantity
+    row.countText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.countText:SetPoint("LEFT", row, "LEFT", 230, 0)
+    row.countText:SetWidth(70)
+    row.countText:SetJustifyH("LEFT")
+
+    -- Vendor cost
+    row.vendorText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.vendorText:SetPoint("LEFT", row, "LEFT", 310, 0)
+    row.vendorText:SetWidth(120)
+    row.vendorText:SetJustifyH("RIGHT")
+
+    -- AH price
+    row.ahText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.ahText:SetPoint("LEFT", row, "LEFT", 440, 0)
+    row.ahText:SetWidth(120)
+    row.ahText:SetJustifyH("RIGHT")
+
+    -- Profit
+    row.profitText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.profitText:SetPoint("LEFT", row, "LEFT", 570, 0)
+    row.profitText:SetWidth(120)
+    row.profitText:SetJustifyH("RIGHT")
+    row.profitText:SetTextColor(0, 1, 0)
+
+    -- ROI %
+    row.roiText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.roiText:SetPoint("LEFT", row, "LEFT", 700, 0)
+    row.roiText:SetWidth(60)
+    row.roiText:SetJustifyH("RIGHT")
+    row.roiText:SetTextColor(0, 1, 0)
+
+    -- Tooltip on hover
+    row:SetScript("OnEnter", function(self)
+        if self.link then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetHyperlink(self.link)
+            GameTooltip:Show()
+        end
+    end)
+    row:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
+
+    return row
+end
+
+-----------------------------------------------------------------------
+-- Update the results list display
+-----------------------------------------------------------------------
+local function UpdateResultsList()
+    if not VendorArbResultsContent then return end
+
+    local results = scanner.results
+    local numResults = #results
+
+    -- Ensure we have enough rows
+    for i = #resultRows + 1, numResults do
+        resultRows[i] = CreateResultRow(VendorArbResultsContent, i)
+    end
+
+    -- Update row data
+    for i, row in ipairs(resultRows) do
+        if i <= numResults then
+            local r = results[i]
+            row.link = r.link
+            
+            -- Set item icon
+            local itemID = GetItemIDFromLink(r.link)
+            if itemID then
+                local iconTexture = GetItemIcon(itemID)
+                if iconTexture then
+                    row.icon:SetTexture(iconTexture)
+                end
+            end
+            
+            row.itemText:SetText(r.link or r.name)
+            row.countText:SetText(r.count .. " stack of 1")
+            row.vendorText:SetText(FormatMoneyIcons(r.vendorCost))
+            row.ahText:SetText(FormatMoneyIcons(r.ahPrice))
+            row.profitText:SetText(FormatMoneyIcons(r.profit))
+            row.roiText:SetText(string.format("%.0f%%", r.roi * 100))
+            row:Show()
+        else
+            row:Hide()
+        end
+    end
+
+    -- Update scroll content height
+    VendorArbResultsContent:SetHeight(math.max(1, numResults * ROW_HEIGHT))
+end
 
 -----------------------------------------------------------------------
 -- Create the panel UI
@@ -109,41 +268,54 @@ local function CreateVendorArbPanel()
     if not AuctionFrame then return end
 
     local f = CreateFrame("Frame", "VendorArbPanel", AuctionFrame)
-    f:SetAllPoints(AuctionFrame)
+    f:SetPoint("TOPLEFT", AuctionFrame, "TOPLEFT", 8, -50)
+    f:SetPoint("BOTTOMRIGHT", AuctionFrame, "BOTTOMRIGHT", -8, 35)
+    f:SetFrameLevel(AuctionFrame:GetFrameLevel() + 10)  -- Ensure we're above other content
     f:Hide()
     VendorArbPanel = f
 
-    local bg = f:CreateTexture(nil, "BACKGROUND")
+    -- Use AH-style marble background texture (tiled)
+    local bg = f:CreateTexture(nil, "BACKGROUND", nil, -8)
     bg:SetAllPoints(f)
-    bg:SetColorTexture(0, 0, 0, 0.25)
+    bg:SetTexture("Interface\\FrameGeneral\\UI-Background-Marble", "REPEAT", "REPEAT")
+    bg:SetHorizTile(true)
+    bg:SetVertTile(true)
+    
+    -- Update texture coords when frame resizes to tile properly
+    f:SetScript("OnSizeChanged", function(self, width, height)
+        local tileSize = 256  -- Standard texture size
+        bg:SetTexCoord(0, width/tileSize, 0, height/tileSize)
+    end)
+    -- Initial sizing
+    C_Timer.After(0, function()
+        local width, height = f:GetSize()
+        if width > 0 and height > 0 then
+            bg:SetTexCoord(0, width/256, 0, height/256)
+        end
+    end)
 
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    title:SetPoint("TOPLEFT", 20, -40)
-    title:SetText("Vendor -> AH Arbitrage Finder")
-
-    local desc = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -5)
-    desc:SetText("Find items to buy from vendors and sell on the AH for profit.")
-
-    local status = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    status:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -10)
+    -- Status text at top
+    local status = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    status:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -15)
     status:SetText("Press 'Scan AH' to find arbitrage opportunities.")
     VendorArbStatus = status
 
+    -- Scan button in top-right area
     local btn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    btn:SetSize(120, 24)
-    btn:SetPoint("TOPLEFT", status, "BOTTOMLEFT", 0, -10)
+    btn:SetSize(100, 22)
+    btn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -20, -10)
     btn:SetText("Scan AH")
     btn:SetScript("OnClick", function()
         if StartScan then StartScan() end
     end)
+    VendorArbScanButton = btn
     f.ScanButton = btn
 
-    -- Progress bar
-    local barWidth, barHeight = 400, 20
+    -- Progress bar (next to status)
+    local barWidth, barHeight = 200, 16
     local progressBg = CreateFrame("Frame", nil, f, "BackdropTemplate")
     progressBg:SetSize(barWidth, barHeight)
-    progressBg:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -15)
+    progressBg:SetPoint("LEFT", status, "RIGHT", 15, 0)
     progressBg:SetBackdrop({
         bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -152,6 +324,7 @@ local function CreateVendorArbPanel()
     })
     progressBg:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
     progressBg:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+    f.ProgressBg = progressBg
 
     local progressBar = CreateFrame("StatusBar", nil, progressBg)
     progressBar:SetPoint("TOPLEFT", 4, -4)
@@ -166,6 +339,50 @@ local function CreateVendorArbPanel()
     progressText:SetPoint("CENTER", progressBar, "CENTER", 0, 0)
     progressText:SetText("")
     VendorArbProgressText = progressText
+
+    -- Column headers
+    local headerY = -40
+    local headerFrame = CreateFrame("Frame", nil, f)
+    headerFrame:SetPoint("TOPLEFT", f, "TOPLEFT", 10, headerY)
+    headerFrame:SetPoint("TOPRIGHT", f, "TOPRIGHT", -30, headerY)
+    headerFrame:SetHeight(20)
+
+    local headerBg = headerFrame:CreateTexture(nil, "BACKGROUND")
+    headerBg:SetAllPoints()
+    headerBg:SetColorTexture(0.2, 0.2, 0.2, 0.8)
+
+    local headers = {
+        { text = "Name", offset = 5 },
+        { text = "Quantity", offset = 230 },
+        { text = "Vendor Cost", offset = 310 },
+        { text = "AH Price", offset = 440 },
+        { text = "Profit", offset = 570 },
+        { text = "ROI", offset = 700 },
+    }
+
+    for _, h in ipairs(headers) do
+        local headerText = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        headerText:SetPoint("LEFT", headerFrame, "LEFT", h.offset, 0)
+        headerText:SetText(h.text)
+        headerText:SetTextColor(1, 0.82, 0)
+    end
+
+    -- Scrollable results area
+    local scrollFrame = CreateFrame("ScrollFrame", "VendorArbScrollFrame", f, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", headerFrame, "BOTTOMLEFT", 0, -2)
+    scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -30, 10)
+    VendorArbResultsScrollFrame = scrollFrame
+
+    local scrollContent = CreateFrame("Frame", "VendorArbScrollContent", scrollFrame)
+    scrollContent:SetWidth(scrollFrame:GetWidth() - 20)
+    scrollContent:SetHeight(1)
+    scrollFrame:SetScrollChild(scrollContent)
+    VendorArbResultsContent = scrollContent
+
+    -- Update content width when scrollframe resizes
+    scrollFrame:SetScript("OnSizeChanged", function(self, width, height)
+        scrollContent:SetWidth(width - 20)
+    end)
 end
 
 -----------------------------------------------------------------------
@@ -202,19 +419,98 @@ local function CreateVendorArbTab()
     PanelTemplates_SetNumTabs(auctionFrame, vendorArbTabID)
     PanelTemplates_EnableTab(auctionFrame, vendorArbTabID)
 
+    -- Create custom title bar text
+    VendorArbTitleText = AuctionFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    VendorArbTitleText:SetPoint("TOP", AuctionFrame, "TOP", 0, -18)
+    VendorArbTitleText:SetText("VendorArb")
+    VendorArbTitleText:Hide()
+
     tab:SetScript("OnClick", function(self)
         PanelTemplates_SetTab(auctionFrame, vendorArbTabID)
+        
+        -- Hide all standard AH frames
         if AuctionFrameBrowse then AuctionFrameBrowse:Hide() end
         if AuctionFrameBid then AuctionFrameBid:Hide() end
         if AuctionFrameAuctions then AuctionFrameAuctions:Hide() end
-        if VendorArbPanel then VendorArbPanel:Show() end
+        
+        -- Hide Auctionator frames if present
+        if AuctionatorShoppingFrame then AuctionatorShoppingFrame:Hide() end
+        if AuctionatorSellingFrame then AuctionatorSellingFrame:Hide() end
+        if AuctionatorCancellingFrame then AuctionatorCancellingFrame:Hide() end
+        if AuctionatorConfigFrame then AuctionatorConfigFrame:Hide() end
+        
+        -- Hide any children of AuctionFrame that look like content panels
+        for _, child in ipairs({AuctionFrame:GetChildren()}) do
+            if child ~= VendorArbPanel and child.Hide and child:IsShown() then
+                local name = child:GetName()
+                -- Hide unnamed frames or frames that look like content panels
+                if not name or (name and (name:find("Frame") or name:find("Panel"))) then
+                    -- Don't hide tabs, title, portrait, or our own panel
+                    if not name or (not name:find("Tab") and not name:find("Portrait") and not name:find("Title")) then
+                        child:Hide()
+                    end
+                end
+            end
+        end
+        
+        if VendorArbPanel then 
+            VendorArbPanel:Show()
+            UpdateResultsList()
+        end
+        if VendorArbTitleText then VendorArbTitleText:Show() end
         PlaySound(SOUNDKIT.IG_CHARACTER_INFO_TAB)
     end)
 
+    -- Function to hide our panel
+    local function HideVendorArbPanel()
+        if VendorArbPanel then VendorArbPanel:Hide() end
+        if VendorArbTitleText then VendorArbTitleText:Hide() end
+    end
+
+    -- Hook the standard Blizzard AH tabs directly
+    for i = 1, 3 do
+        local blizzTab = _G["AuctionFrameTab" .. i]
+        if blizzTab then
+            blizzTab:HookScript("OnClick", HideVendorArbPanel)
+        end
+    end
+    
+    -- Hook OnShow for the standard AH frames - when they show, hide our panel
+    if AuctionFrameBrowse then
+        AuctionFrameBrowse:HookScript("OnShow", HideVendorArbPanel)
+    end
+    if AuctionFrameBid then
+        AuctionFrameBid:HookScript("OnShow", HideVendorArbPanel)
+    end
+    if AuctionFrameAuctions then
+        AuctionFrameAuctions:HookScript("OnShow", HideVendorArbPanel)
+    end
+    
+    -- Hook to hide our panel when other tabs are clicked (for addon tabs)
     hooksecurefunc("AuctionFrameTab_OnClick", function(self, index)
         local id = index or (self and self.GetID and self:GetID())
-        if VendorArbPanel and id ~= vendorArbTabID then
-            VendorArbPanel:Hide()
+        if id ~= vendorArbTabID then
+            HideVendorArbPanel()
+        end
+    end)
+    
+    -- Also hook PanelTemplates_SetTab for addons that use it directly
+    hooksecurefunc("PanelTemplates_SetTab", function(frame, id)
+        if frame == AuctionFrame and id ~= vendorArbTabID then
+            HideVendorArbPanel()
+        end
+    end)
+    
+    -- Hook any future tabs that get added
+    hooksecurefunc("PanelTemplates_SetNumTabs", function(frame, numTabs)
+        if frame == AuctionFrame then
+            for i = 1, numTabs do
+                local otherTab = _G["AuctionFrameTab" .. i]
+                if otherTab and i ~= vendorArbTabID and not otherTab.vendorArbHooked then
+                    otherTab:HookScript("OnClick", HideVendorArbPanel)
+                    otherTab.vendorArbHooked = true
+                end
+            end
         end
     end)
 end
@@ -291,6 +587,7 @@ local function FinishScan()
         if VendorArbStatus then
             VendorArbStatus:SetText("No profitable vendor->AH opportunities found.")
         end
+        UpdateResultsList()
         return
     end
 
@@ -311,31 +608,15 @@ local function FinishScan()
     end
     scanner.results = unique
 
-    print(ADDON_PREFIX, "Top vendor->AH arbitrage opportunities:")
-    print(ADDON_PREFIX, "(Buy from vendor, sell on AH)")
-
-    local maxRows = math.min(MAX_RESULTS_PRINT, #scanner.results)
-    for i = 1, maxRows do
-        local r = scanner.results[i]
-        print(string.format(
-            "%s %s x%d | |cffffffffVendor: %s|r | |cffffff00AH: %s|r | |cff00ff00Profit: %s (%.0f%%)|r",
-            ADDON_PREFIX,
-            r.link or r.name,
-            r.count,
-            FormatMoney(r.vendorCost),
-            FormatMoney(r.ahPrice),
-            FormatMoney(r.profit),
-            r.roi * 100
-        ))
-    end
-
     if VendorArbStatus then
         VendorArbStatus:SetText(string.format(
-            "Found %d profitable items. Top %d printed to chat.",
-            #scanner.results,
-            maxRows
+            "Found %d profitable opportunities.",
+            #scanner.results
         ))
     end
+
+    -- Update the results list in the UI
+    UpdateResultsList()
 end
 
 -----------------------------------------------------------------------
