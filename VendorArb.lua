@@ -119,6 +119,81 @@ local scanner = {
 }
 
 -----------------------------------------------------------------------
+-- Sort state
+-----------------------------------------------------------------------
+local sortState = {
+    column = "profit",  -- Default sort column
+    ascending = false,  -- Default descending (highest first)
+}
+
+-----------------------------------------------------------------------
+-- Data persistence
+-----------------------------------------------------------------------
+local function SaveData()
+    VendorArbDB = VendorArbDB or {}
+    VendorArbDB.results = scanner.results
+    VendorArbDB.scanTime = time()
+    VendorArbDB.sortState = {
+        column = sortState.column,
+        ascending = sortState.ascending,
+    }
+end
+
+local function LoadData()
+    if not VendorArbDB then
+        VendorArbDB = {}
+        return
+    end
+    
+    if VendorArbDB.results then
+        scanner.results = VendorArbDB.results
+    end
+    
+    if VendorArbDB.sortState then
+        sortState.column = VendorArbDB.sortState.column or "profit"
+        sortState.ascending = VendorArbDB.sortState.ascending or false
+    end
+end
+
+local function GetTimeSinceLastScan()
+    if not VendorArbDB or not VendorArbDB.scanTime then
+        return nil
+    end
+    local elapsed = time() - VendorArbDB.scanTime
+    if elapsed < 60 then
+        return "just now"
+    elseif elapsed < 3600 then
+        return string.format("%d min ago", math.floor(elapsed / 60))
+    elseif elapsed < 86400 then
+        return string.format("%d hr ago", math.floor(elapsed / 3600))
+    else
+        return string.format("%d days ago", math.floor(elapsed / 86400))
+    end
+end
+
+local function UpdateStatusText()
+    if not VendorArbStatus then return end
+    
+    local numResults = #scanner.results
+    if numResults > 0 then
+        local timeStr = GetTimeSinceLastScan()
+        if timeStr then
+            VendorArbStatus:SetText(string.format(
+                "Showing %d opportunities (scanned %s). Click 'Scan AH' to refresh.",
+                numResults, timeStr
+            ))
+        else
+            VendorArbStatus:SetText(string.format(
+                "Showing %d profitable opportunities.",
+                numResults
+            ))
+        end
+    else
+        VendorArbStatus:SetText("Press 'Scan AH' to find arbitrage opportunities.")
+    end
+end
+
+-----------------------------------------------------------------------
 -- UI elements
 -----------------------------------------------------------------------
 local vendorArbTabID = nil
@@ -216,10 +291,43 @@ local function CreateResultRow(parent, index)
 end
 
 -----------------------------------------------------------------------
+-- Sort the results based on current sort state
+-----------------------------------------------------------------------
+local function SortResults()
+    local col = sortState.column
+    local asc = sortState.ascending
+    
+    table.sort(scanner.results, function(a, b)
+        local valA, valB
+        
+        if col == "vendorCost" then
+            valA, valB = a.vendorCost, b.vendorCost
+        elseif col == "ahPrice" then
+            valA, valB = a.ahPrice, b.ahPrice
+        elseif col == "profit" then
+            valA, valB = a.profit, b.profit
+        elseif col == "roi" then
+            valA, valB = a.roi, b.roi
+        else
+            valA, valB = a.profit, b.profit  -- fallback
+        end
+        
+        if asc then
+            return valA < valB
+        else
+            return valA > valB
+        end
+    end)
+end
+
+-----------------------------------------------------------------------
 -- Update the results list display
 -----------------------------------------------------------------------
 local function UpdateResultsList()
     if not VendorArbResultsContent then return end
+    
+    -- Apply current sort
+    SortResults()
 
     local results = scanner.results
     local numResults = #results
@@ -351,21 +459,89 @@ local function CreateVendorArbPanel()
     headerBg:SetAllPoints()
     headerBg:SetColorTexture(0.2, 0.2, 0.2, 0.8)
 
+    -- Arrow indicators for sort direction
+    local ARROW_UP = " ▲"
+    local ARROW_DOWN = " ▼"
+    
+    local headerButtons = {}
+    
     local headers = {
-        { text = "Name", offset = 5 },
-        { text = "Quantity", offset = 230 },
-        { text = "Vendor Cost", offset = 310 },
-        { text = "AH Price", offset = 440 },
-        { text = "Profit", offset = 570 },
-        { text = "ROI", offset = 700 },
+        { text = "Name", offset = 5, width = 220, sortKey = nil },
+        { text = "Quantity", offset = 230, width = 75, sortKey = nil },
+        { text = "Vendor Cost", offset = 310, width = 125, sortKey = "vendorCost" },
+        { text = "AH Price", offset = 440, width = 125, sortKey = "ahPrice" },
+        { text = "Profit", offset = 570, width = 125, sortKey = "profit" },
+        { text = "ROI", offset = 700, width = 70, sortKey = "roi" },
     }
-
-    for _, h in ipairs(headers) do
-        local headerText = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        headerText:SetPoint("LEFT", headerFrame, "LEFT", h.offset, 0)
-        headerText:SetText(h.text)
-        headerText:SetTextColor(1, 0.82, 0)
+    
+    -- Function to update header text with sort arrows
+    local function UpdateHeaderArrows()
+        for _, hBtn in ipairs(headerButtons) do
+            if hBtn.sortKey then
+                local arrow = ""
+                if sortState.column == hBtn.sortKey then
+                    arrow = sortState.ascending and ARROW_UP or ARROW_DOWN
+                end
+                hBtn.text:SetText(hBtn.baseText .. arrow)
+            end
+        end
     end
+
+    for i, h in ipairs(headers) do
+        if h.sortKey then
+            -- Create clickable button for sortable columns
+            local headerBtn = CreateFrame("Button", nil, headerFrame)
+            headerBtn:SetPoint("LEFT", headerFrame, "LEFT", h.offset, 0)
+            headerBtn:SetSize(h.width, 20)
+            headerBtn.sortKey = h.sortKey
+            headerBtn.baseText = h.text
+            
+            local headerText = headerBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            headerText:SetPoint("LEFT", 0, 0)
+            headerText:SetText(h.text)
+            headerText:SetTextColor(1, 0.82, 0)
+            headerBtn.text = headerText
+            
+            -- Highlight on hover
+            headerBtn:SetScript("OnEnter", function(self)
+                self.text:SetTextColor(1, 1, 0)
+                GameTooltip:SetOwner(self, "ANCHOR_TOP")
+                GameTooltip:SetText("Click to sort by " .. self.baseText)
+                GameTooltip:Show()
+            end)
+            headerBtn:SetScript("OnLeave", function(self)
+                self.text:SetTextColor(1, 0.82, 0)
+                GameTooltip:Hide()
+            end)
+            
+            -- Click to sort
+            headerBtn:SetScript("OnClick", function(self)
+                if sortState.column == self.sortKey then
+                    -- Toggle direction if same column
+                    sortState.ascending = not sortState.ascending
+                else
+                    -- New column, default to descending (highest first)
+                    sortState.column = self.sortKey
+                    sortState.ascending = false
+                end
+                UpdateHeaderArrows()
+                UpdateResultsList()
+                SaveData()  -- Persist sort preference
+                PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
+            end)
+            
+            table.insert(headerButtons, headerBtn)
+        else
+            -- Non-sortable column (just text)
+            local headerText = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            headerText:SetPoint("LEFT", headerFrame, "LEFT", h.offset, 0)
+            headerText:SetText(h.text)
+            headerText:SetTextColor(1, 0.82, 0)
+        end
+    end
+    
+    -- Initial arrow update
+    UpdateHeaderArrows()
 
     -- Scrollable results area
     local scrollFrame = CreateFrame("ScrollFrame", "VendorArbScrollFrame", f, "UIPanelScrollFrameTemplate")
@@ -455,6 +631,7 @@ local function CreateVendorArbTab()
         
         if VendorArbPanel then 
             VendorArbPanel:Show()
+            UpdateStatusText()
             UpdateResultsList()
         end
         if VendorArbTitleText then VendorArbTitleText:Show() end
@@ -566,7 +743,7 @@ local function ProcessCurrentPage()
 end
 
 -----------------------------------------------------------------------
--- Finish scan: sort and display results
+-- Finish scan: deduplicate and display results
 -----------------------------------------------------------------------
 local function FinishScan()
     scanner.running = false
@@ -591,12 +768,8 @@ local function FinishScan()
         return
     end
 
-    -- Sort by profit descending
-    table.sort(scanner.results, function(a, b)
-        return a.profit > b.profit
-    end)
-
-    -- Remove duplicates (keep best profit per item)
+    -- Remove duplicates (keep best profit per item, sort first to ensure best is kept)
+    table.sort(scanner.results, function(a, b) return a.profit > b.profit end)
     local seen = {}
     local unique = {}
     for _, r in ipairs(scanner.results) do
@@ -615,6 +788,9 @@ local function FinishScan()
         ))
     end
 
+    -- Save results to persist across sessions
+    SaveData()
+
     -- Update the results list in the UI
     UpdateResultsList()
 end
@@ -631,7 +807,10 @@ scanFrame:Hide()
 scanFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
         local name = ...
-        if name == "Blizzard_AuctionUI" then
+        if name == "VendorArb" then
+            -- Load saved data when our addon loads
+            LoadData()
+        elseif name == "Blizzard_AuctionUI" then
             CreateVendorArbTab()
         end
 
