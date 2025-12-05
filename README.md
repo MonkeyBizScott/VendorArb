@@ -12,7 +12,7 @@ Scans the Auction House for items that can be purchased from vendors and resold 
 
 ## Features
 
-- **AH Scanner**: Full auction house scan to find profitable items
+- **AH Scanner**: Full auction house scan to find profitable items!
 - **Tooltip Integration**: Hover over any item to see its vendor buy price (if available)
 - **Progress Bar**: Visual progress indicator during scans
 
