@@ -268,8 +268,8 @@ local function CreateVendorArbPanel()
     if not AuctionFrame then return end
 
     local f = CreateFrame("Frame", "VendorArbPanel", AuctionFrame)
-    f:SetPoint("TOPLEFT", AuctionFrame, "TOPLEFT", 0, -56)
-    f:SetPoint("BOTTOMRIGHT", AuctionFrame, "BOTTOMRIGHT", 0, 0)
+    f:SetPoint("TOPLEFT", AuctionFrame, "TOPLEFT", 8, -50)
+    f:SetPoint("BOTTOMRIGHT", AuctionFrame, "BOTTOMRIGHT", -8, 35)
     f:SetFrameLevel(AuctionFrame:GetFrameLevel() + 10)  -- Ensure we're above other content
     f:Hide()
     VendorArbPanel = f
