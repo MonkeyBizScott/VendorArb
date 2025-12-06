@@ -13,6 +13,33 @@ local MAX_RESULTS_PRINT = 30     -- How many results to print to chat
 -----------------------------------------------------------------------
 -- Utils
 -----------------------------------------------------------------------
+
+-- Helper to save vendor price override (persisted)
+local function SaveVendorPriceOverride(itemID, unitPrice)
+    if not itemID or not unitPrice or unitPrice <= 0 then return end
+    VendorArbDB = VendorArbDB or {}
+    VendorArbDB.vendorOverrides = VendorArbDB.vendorOverrides or {}
+    VendorArbDB.vendorOverrides[itemID] = unitPrice
+    -- Also update in-memory VENDOR_PRICES
+    if VENDOR_PRICES then
+        VENDOR_PRICES[itemID] = unitPrice
+    end
+end
+
+-- Helper to get best known vendor price (override > database)
+local function GetVendorBuyPrice(itemID)
+    if not itemID then return nil end
+    -- Check saved overrides first
+    if VendorArbDB and VendorArbDB.vendorOverrides and VendorArbDB.vendorOverrides[itemID] then
+        return VendorArbDB.vendorOverrides[itemID]
+    end
+    -- Fall back to VENDOR_PRICES
+    if VENDOR_PRICES and VENDOR_PRICES[itemID] then
+        return VENDOR_PRICES[itemID]
+    end
+    return nil
+end
+
 local function FormatMoney(copper)
     copper = copper or 0
     local negative = copper < 0
@@ -66,14 +93,72 @@ local function GetItemIDFromLink(itemLink)
     return itemID and tonumber(itemID) or nil
 end
 
+-- Check if merchant frame is open
+local function IsMerchantOpen()
+    if MerchantFrame and MerchantFrame:IsShown() then
+        return true
+    end
+    if MerchantFrame and MerchantFrame:IsVisible() then
+        return true
+    end
+    return false
+end
+
+-- Cache for current merchant item being hovered
+local currentMerchantItem = {
+    itemID = nil,
+    price = nil,
+}
+
+-- Hook merchant item buttons to cache price on hover
+local function HookMerchantButtons()
+    for i = 1, 12 do  -- Merchant frame has up to 12 items per page
+        local button = _G["MerchantItem" .. i .. "ItemButton"]
+        if button and not button.VA_Hooked then
+            button:HookScript("OnEnter", function(self)
+                local index = self:GetID()
+                if index and index > 0 then
+                    local link = GetMerchantItemLink(index)
+                    if link then
+                        local itemID = GetItemIDFromLink(link)
+                        local name, texture, price, quantity, numAvailable, isUsable, extendedCost = GetMerchantItemInfo(index)
+                        if itemID and price and price > 0 and not extendedCost then
+                            quantity = (quantity and quantity > 0) and quantity or 1
+                            local unitPrice = math.floor(price / quantity)
+                            currentMerchantItem.itemID = itemID
+                            currentMerchantItem.price = unitPrice
+                            
+                            -- Persist live price to SavedVariables
+                            SaveVendorPriceOverride(itemID, unitPrice)
+                        end
+                    end
+                end
+            end)
+            button:HookScript("OnLeave", function(self)
+                currentMerchantItem.itemID = nil
+                currentMerchantItem.price = nil
+            end)
+            button.VA_Hooked = true
+        end
+    end
+end
+
+-- Hook when merchant frame opens
+local merchantHookFrame = CreateFrame("Frame")
+merchantHookFrame:RegisterEvent("MERCHANT_SHOW")
+merchantHookFrame:SetScript("OnEvent", function(self, event)
+    if event == "MERCHANT_SHOW" then
+        C_Timer.After(0.1, HookMerchantButtons)
+    end
+end)
+
 -- If at a merchant, try to get the unit price with your current reputation discount
 local function GetRepAdjustedVendorUnitPrice(itemID)
     if not itemID then return nil end
-    if not MerchantFrame or not MerchantFrame:IsShown() then return nil end
-    if not GetMerchantNumItems then return nil end
-
-    local num = GetMerchantNumItems()
-    if not num or num <= 0 then return nil end
+    if not IsMerchantOpen() then return nil end
+    
+    local num = GetMerchantNumItems and GetMerchantNumItems() or 0
+    if num <= 0 then return nil end
 
     for i = 1, num do
         local link = GetMerchantItemLink(i)
@@ -95,6 +180,40 @@ local function GetRepAdjustedVendorUnitPrice(itemID)
     return nil
 end
 
+-- Get price directly from merchant slot being hovered
+local function GetMerchantSlotPrice()
+    if not IsMerchantOpen() then return nil, nil end
+    
+    -- Check if we're hovering over a merchant item button
+    local frame = GetMouseFocus and GetMouseFocus()
+    if not frame then return nil, nil end
+    
+    local ok, frameName = pcall(function() return frame:GetName() end)
+    if not ok or not frameName then return nil, nil end
+    
+    -- Match MerchantItem1ItemButton, MerchantItem2ItemButton, etc.
+    local slotIndex = frameName:match("MerchantItem(%d+)ItemButton")
+    if not slotIndex then
+        slotIndex = frameName:match("MerchantItem(%d+)")
+    end
+    
+    if slotIndex then
+        local index = tonumber(slotIndex)
+        if index then
+            local link = GetMerchantItemLink(index)
+            if link then
+                local itemID = GetItemIDFromLink(link)
+                local name, texture, price, quantity, numAvailable, isUsable, extendedCost = GetMerchantItemInfo(index)
+                if price and price > 0 and not extendedCost then
+                    quantity = (quantity and quantity > 0) and quantity or 1
+                    return itemID, math.floor(price / quantity)
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
 -----------------------------------------------------------------------
 -- Tooltip hook: show vendor buy price on item hover
 -----------------------------------------------------------------------
@@ -105,40 +224,48 @@ local function OnTooltipSetItem(tooltip)
     local itemID = GetItemIDFromLink(itemLink)
     if not itemID then return end
     
-    -- Get buy price from curated VENDOR_PRICES, sell price from full ItemDB
-    local buyPrice = VENDOR_PRICES and VENDOR_PRICES[itemID]
+    -- Get buy price (prefer saved overrides), sell price from full ItemDB
+    local buyPrice = GetVendorBuyPrice(itemID)
     local sellPrice = VendorArb_ItemDB and VendorArb_ItemDB[itemID] and VendorArb_ItemDB[itemID].sell
     
-    if (buyPrice and buyPrice > 0) or (sellPrice and sellPrice > 0) then
+    -- Try to get live price from merchant - check cache first, then scan
+    local livePrice = nil
+    if currentMerchantItem.itemID == itemID and currentMerchantItem.price then
+        livePrice = currentMerchantItem.price
+    else
+        livePrice = GetRepAdjustedVendorUnitPrice(itemID)
+    end
+    
+    if (buyPrice and buyPrice > 0) or (sellPrice and sellPrice > 0) or (livePrice and livePrice > 0) then
         tooltip:AddLine(" ")
-        if buyPrice and buyPrice > 0 then
+        
+        -- Show vendor buy price
+        if livePrice and livePrice > 0 then
+            -- At a merchant: show live price (includes your rep discount)
+            local rightText = FormatMoneyIcons(livePrice)
+            -- Calculate and show discount if we have base price to compare
+            if buyPrice and buyPrice > 0 and livePrice < buyPrice then
+                local pct = (1 - (livePrice / buyPrice)) * 100
+                -- Round to nearest 5% to match rep tiers
+                local nearest = 5 * math.floor((pct / 5) + 0.5)
+                if nearest > 0 then
+                    rightText = string.format("%s (-%d%%)", rightText, nearest)
+                end
+            end
+            tooltip:AddDoubleLine(
+                "[VA] Vendor Buy:",
+                rightText,
+                1, 0.82, 0,  -- left text color (yellow)
+                0.8, 1, 0.8  -- right text color (green for discounted)
+            )
+        elseif buyPrice and buyPrice > 0 then
+            -- Not at a merchant: show base price from database
             tooltip:AddDoubleLine(
                 "[VA] Vendor Buy:",
                 FormatMoneyIcons(buyPrice),
                 1, 0.82, 0,  -- left text color (yellow)
                 1, 1, 1   -- right text color (white)
             )
-
-            -- If you're talking to a merchant that sells this item, show your rep-adjusted price
-            local repUnitPrice = GetRepAdjustedVendorUnitPrice(itemID)
-            if repUnitPrice and repUnitPrice > 0 and repUnitPrice ~= buyPrice then
-                local rightText = FormatMoneyIcons(repUnitPrice)
-                -- Try to show discount percentage compared to base if we can infer it
-                if buyPrice and buyPrice > 0 and repUnitPrice < buyPrice then
-                    local pct = (1 - (repUnitPrice / buyPrice)) * 100
-                    -- Round to nearest 5% to match rep tiers
-                    local nearest = 5 * math.floor((pct / 5) + 0.5)
-                    if nearest > 0 then
-                        rightText = string.format("%s (-%d%%)", rightText, nearest)
-                    end
-                end
-                tooltip:AddDoubleLine(
-                    "[VA] Vendor Buy (rep):",
-                    rightText,
-                    1, 0.82, 0,
-                    0.8, 1, 0.8
-                )
-            end
         end
         if sellPrice and sellPrice > 0 then
             tooltip:AddDoubleLine(
@@ -214,6 +341,13 @@ local function LoadData()
         sortState.column = VendorArbDB.sortState.column or "profit"
         sortState.ascending = VendorArbDB.sortState.ascending or false
     end
+    
+    -- Apply saved vendor price overrides to in-memory table
+    if VendorArbDB.vendorOverrides and VENDOR_PRICES then
+        for itemID, price in pairs(VendorArbDB.vendorOverrides) do
+            VENDOR_PRICES[itemID] = price
+        end
+    end
 end
 
 local function GetTimeSinceLastScan()
@@ -278,6 +412,7 @@ local function CreateResultRow(parent, index)
     row:SetHeight(ROW_HEIGHT)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * ROW_HEIGHT))
     row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * ROW_HEIGHT))
+    row:RegisterForClicks("AnyUp")
 
     -- Alternating background
     local bg = row:CreateTexture(nil, "BACKGROUND")
@@ -341,11 +476,41 @@ local function CreateResultRow(parent, index)
         if self.link then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:SetHyperlink(self.link)
+            -- Add hint about Ctrl+Click
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("|cff00ff00Ctrl+Click|r to show vendors", 0.5, 0.5, 0.5)
             GameTooltip:Show()
         end
     end)
     row:SetScript("OnLeave", function(self)
         GameTooltip:Hide()
+    end)
+
+    -- Ctrl+Click to show NPC vendors
+    row:SetScript("OnClick", function(self, button)
+        if button == "LeftButton" and IsControlKeyDown() then
+            local itemID = self.itemID
+            if itemID and VENDOR_NPC_DATA and VENDOR_NPC_DATA[itemID] then
+                local npcData = VENDOR_NPC_DATA[itemID]
+                local npcID = npcData.npc
+                local npcCount = npcData.npccount or 1
+                local itemName = self.link or "Unknown Item"
+                
+                print(string.format("%s Vendors for %s:", ADDON_PREFIX, itemName))
+                
+                if npcCount == 1 then
+                    print(string.format("  NPC ID: |cff00ffff%d|r", npcID))
+                else
+                    print(string.format("  Sold by |cff00ffff%d|r vendors. Example NPC ID: |cff00ffff%d|r", npcCount, npcID))
+                end
+                
+                -- Print Wowhead link
+                local wowheadLink = VendorArb_GetNPCWowheadLink(npcID)
+                print(string.format("  Wowhead: |cff8888ff%s|r", wowheadLink))
+            else
+                print(string.format("%s No vendor data found for this item.", ADDON_PREFIX))
+            end
+        end
     end)
 
     return row
@@ -404,8 +569,9 @@ local function UpdateResultsList()
             local r = results[i]
             row.link = r.link
             
-            -- Set item icon
+            -- Set item icon and store itemID for ctrl-click
             local itemID = GetItemIDFromLink(r.link)
+            row.itemID = itemID
             if itemID then
                 local iconTexture = GetItemIcon(itemID)
                 if iconTexture then
@@ -810,7 +976,10 @@ local function FinishScan()
     -- Convert lowest prices to results with profit calculations
     scanner.results = {}
     for itemID, data in pairs(lowestPrices) do
-        local vendorCost = VendorArb_ItemDB[itemID].buy  -- Cost per unit from vendor
+        -- Cost per unit from vendor (prefer saved override, then curated, then ItemDB)
+        local vendorCost = (VendorArbDB and VendorArbDB.vendorOverrides and VendorArbDB.vendorOverrides[itemID])
+                        or (VENDOR_PRICES and VENDOR_PRICES[itemID])
+                        or (VendorArb_ItemDB[itemID] and VendorArb_ItemDB[itemID].buy)
         local ahPrice = data.pricePerUnit         -- Lowest AH price per unit
         
         -- Calculate profit: sell at lowest AH price minus AH cut, compare to vendor cost
