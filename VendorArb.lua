@@ -84,17 +84,17 @@ local function OnTooltipSetItem(tooltip)
         tooltip:AddLine(" ")
         if buyPrice and buyPrice > 0 then
             tooltip:AddDoubleLine(
-                "|cff00ff00[VendorArb]|r Vendor Buy:",
+                "[VA] Vendor Buy:",
                 FormatMoneyIcons(buyPrice),
-                0, 1, 0,  -- left text color (green)
+                1, 0.82, 0,  -- left text color (yellow)
                 1, 1, 1   -- right text color (white)
             )
         end
         if sellPrice and sellPrice > 0 then
             tooltip:AddDoubleLine(
-                "|cff00ff00[VendorArb]|r Vendor Sell:",
+                "[VA] Vendor Sell:",
                 FormatMoneyIcons(sellPrice),
-                0, 1, 0,  -- left text color (green)
+                1, 0.82, 0,  -- left text color (yellow)
                 1, 1, 1   -- right text color (white)
             )
         end
