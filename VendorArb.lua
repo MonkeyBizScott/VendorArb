@@ -70,7 +70,7 @@ end
 -- Tooltip hook: show vendor buy price on item hover
 -----------------------------------------------------------------------
 local function OnTooltipSetItem(tooltip)
-    if not VENDOR_PRICES then return end
+    if not VendorArb_ItemDB then return end
     
     local _, itemLink = tooltip:GetItem()
     if not itemLink then return end
@@ -78,15 +78,25 @@ local function OnTooltipSetItem(tooltip)
     local itemID = GetItemIDFromLink(itemLink)
     if not itemID then return end
     
-    local vendorBuyPrice = VENDOR_PRICES[itemID]
-    if vendorBuyPrice and vendorBuyPrice > 0 then
+    local itemData = VendorArb_ItemDB[itemID]
+    if itemData then
         tooltip:AddLine(" ")
-        tooltip:AddDoubleLine(
-            "|cff00ff00[VendorArb]|r Vendor Buy:",
-            FormatMoney(vendorBuyPrice),
-            0, 1, 0,  -- left text color (green)
-            1, 1, 1   -- right text color (white)
-        )
+        if itemData.buy and itemData.buy > 0 then
+            tooltip:AddDoubleLine(
+                "|cff00ff00[VendorArb]|r Vendor Buy:",
+                FormatMoney(itemData.buy),
+                0, 1, 0,  -- left text color (green)
+                1, 1, 1   -- right text color (white)
+            )
+        end
+        if itemData.sell and itemData.sell > 0 then
+            tooltip:AddDoubleLine(
+                "|cff00ff00[VendorArb]|r Vendor Sell:",
+                FormatMoney(itemData.sell),
+                0, 1, 0,  -- left text color (green)
+                1, 1, 1   -- right text color (white)
+            )
+        end
         tooltip:Show()
     end
 end
@@ -714,7 +724,7 @@ local function ProcessCurrentPage()
             local itemID = GetItemIDFromLink(itemLink)
             scanner.itemsChecked = scanner.itemsChecked + 1
 
-            if itemID and VENDOR_PRICES and VENDOR_PRICES[itemID] then
+            if itemID and VendorArb_ItemDB and VendorArb_ItemDB[itemID] then
                 scanner.vendorItemsFound = scanner.vendorItemsFound + 1
                 foundOnPage = foundOnPage + 1
 
@@ -749,7 +759,7 @@ local function FinishScan()
     -- Convert lowest prices to results with profit calculations
     scanner.results = {}
     for itemID, data in pairs(lowestPrices) do
-        local vendorCost = VENDOR_PRICES[itemID]  -- Cost per unit from vendor
+        local vendorCost = VendorArb_ItemDB[itemID].buy  -- Cost per unit from vendor
         local ahPrice = data.pricePerUnit         -- Lowest AH price per unit
         
         -- Calculate profit: sell at lowest AH price minus AH cut, compare to vendor cost
@@ -880,8 +890,8 @@ scanFrame:RegisterEvent("AUCTION_HOUSE_CLOSED")
 -- Start scan
 -----------------------------------------------------------------------
 StartScan = function()
-    if not VENDOR_PRICES then
-        print(ADDON_PREFIX, "ERROR: VendorPrices.lua not loaded!")
+    if not VendorArb_ItemDB then
+        print(ADDON_PREFIX, "ERROR: ItemDB.lua not loaded!")
         return
     end
 
@@ -897,7 +907,7 @@ StartScan = function()
 
     -- Count vendor items
     local vendorItemCount = 0
-    for _ in pairs(VENDOR_PRICES) do vendorItemCount = vendorItemCount + 1 end
+    for _ in pairs(VendorArb_ItemDB) do vendorItemCount = vendorItemCount + 1 end
     print(ADDON_PREFIX, "Starting scan. Checking AH against", vendorItemCount, "known vendor items...")
 
     scanner.running = true
