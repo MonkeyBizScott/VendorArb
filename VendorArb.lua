@@ -70,29 +70,30 @@ end
 -- Tooltip hook: show vendor buy price on item hover
 -----------------------------------------------------------------------
 local function OnTooltipSetItem(tooltip)
-    if not VendorArb_ItemDB then return end
-    
     local _, itemLink = tooltip:GetItem()
     if not itemLink then return end
     
     local itemID = GetItemIDFromLink(itemLink)
     if not itemID then return end
     
-    local itemData = VendorArb_ItemDB[itemID]
-    if itemData then
+    -- Get buy price from curated VENDOR_PRICES, sell price from full ItemDB
+    local buyPrice = VENDOR_PRICES and VENDOR_PRICES[itemID]
+    local sellPrice = VendorArb_ItemDB and VendorArb_ItemDB[itemID] and VendorArb_ItemDB[itemID].sell
+    
+    if (buyPrice and buyPrice > 0) or (sellPrice and sellPrice > 0) then
         tooltip:AddLine(" ")
-        if itemData.buy and itemData.buy > 0 then
+        if buyPrice and buyPrice > 0 then
             tooltip:AddDoubleLine(
                 "|cff00ff00[VendorArb]|r Vendor Buy:",
-                FormatMoneyIcons(itemData.buy),
+                FormatMoneyIcons(buyPrice),
                 0, 1, 0,  -- left text color (green)
                 1, 1, 1   -- right text color (white)
             )
         end
-        if itemData.sell and itemData.sell > 0 then
+        if sellPrice and sellPrice > 0 then
             tooltip:AddDoubleLine(
                 "|cff00ff00[VendorArb]|r Vendor Sell:",
-                FormatMoneyIcons(itemData.sell),
+                FormatMoneyIcons(sellPrice),
                 0, 1, 0,  -- left text color (green)
                 1, 1, 1   -- right text color (white)
             )
