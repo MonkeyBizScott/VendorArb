@@ -229,20 +229,23 @@ local function PerformSearch(query)
     
     query = query:lower()
     local results = {}
+    local seenItems = {}  -- Track itemIDs we've already added
+    local maxResults = 20
     
-    -- Search through VendorArb_ItemDB
+    -- Search through VendorArb_ItemDB first
     if VendorArb_ItemDB then
         for itemID, data in pairs(VendorArb_ItemDB) do
             local itemName = GetItemInfo(itemID)
             if itemName and itemName:lower():find(query, 1, true) then
                 -- Get purchase price from VENDOR_PRICES (curated list), not ItemDB
                 local purchasePrice = VENDOR_PRICES and VENDOR_PRICES[itemID]
-                table.insert(results, {
+                results[#results + 1] = {
                     itemID = itemID,
                     name = itemName,
                     buyPrice = purchasePrice,
                     sellPrice = data.sell,
-                })
+                }
+                seenItems[itemID] = true
             end
         end
     end
@@ -250,26 +253,18 @@ local function PerformSearch(query)
     -- Also search VENDOR_PRICES for items not in ItemDB
     if VENDOR_PRICES then
         for itemID, buyPrice in pairs(VENDOR_PRICES) do
-            local itemName = GetItemInfo(itemID)
-            if itemName and itemName:lower():find(query, 1, true) then
-                -- Check if not already in results
-                local found = false
-                for _, r in ipairs(results) do
-                    if r.itemID == itemID then
-                        found = true
-                        -- Update purchase price if we have it
-                        r.buyPrice = buyPrice
-                        break
-                    end
-                end
-                if not found then
+            -- Skip if already found in ItemDB
+            if not seenItems[itemID] then
+                local itemName = GetItemInfo(itemID)
+                if itemName and itemName:lower():find(query, 1, true) then
                     local sellPrice = VendorArb_ItemDB and VendorArb_ItemDB[itemID] and VendorArb_ItemDB[itemID].sell
-                    table.insert(results, {
+                    results[#results + 1] = {
                         itemID = itemID,
                         name = itemName,
                         buyPrice = buyPrice,
                         sellPrice = sellPrice,
-                    })
+                    }
+                    seenItems[itemID] = true
                 end
             end
         end
@@ -279,9 +274,6 @@ local function PerformSearch(query)
     table.sort(results, function(a, b)
         return a.name < b.name
     end)
-    
-    -- Limit results
-    local maxResults = 20
     
     -- Ensure we have enough rows
     for i = #searchResultRows + 1, math.min(#results, maxResults) do
