@@ -235,17 +235,19 @@ local function PerformSearch(query)
         for itemID, data in pairs(VendorArb_ItemDB) do
             local itemName = GetItemInfo(itemID)
             if itemName and itemName:lower():find(query, 1, true) then
+                -- Get purchase price from VENDOR_PRICES (curated list), not ItemDB
+                local purchasePrice = VENDOR_PRICES and VENDOR_PRICES[itemID]
                 table.insert(results, {
                     itemID = itemID,
                     name = itemName,
-                    buyPrice = data.buy,
+                    buyPrice = purchasePrice,
                     sellPrice = data.sell,
                 })
             end
         end
     end
     
-    -- Also search VENDOR_PRICES for curated vendor items
+    -- Also search VENDOR_PRICES for items not in ItemDB
     if VENDOR_PRICES then
         for itemID, buyPrice in pairs(VENDOR_PRICES) do
             local itemName = GetItemInfo(itemID)
@@ -255,6 +257,8 @@ local function PerformSearch(query)
                 for _, r in ipairs(results) do
                     if r.itemID == itemID then
                         found = true
+                        -- Update purchase price if we have it
+                        r.buyPrice = buyPrice
                         break
                     end
                 end

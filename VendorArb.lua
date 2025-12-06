@@ -66,6 +66,35 @@ local function GetItemIDFromLink(itemLink)
     return itemID and tonumber(itemID) or nil
 end
 
+-- If at a merchant, try to get the unit price with your current reputation discount
+local function GetRepAdjustedVendorUnitPrice(itemID)
+    if not itemID then return nil end
+    if not MerchantFrame or not MerchantFrame:IsShown() then return nil end
+    if not GetMerchantNumItems then return nil end
+
+    local num = GetMerchantNumItems()
+    if not num or num <= 0 then return nil end
+
+    for i = 1, num do
+        local link = GetMerchantItemLink(i)
+        if link then
+            local mid = GetItemIDFromLink(link)
+            if mid == itemID then
+                local name, texture, price, quantity, numAvailable, isUsable, extendedCost = GetMerchantItemInfo(i)
+                if extendedCost then
+                    -- Items with alternate currency; skip
+                    return nil
+                end
+                if price and price > 0 then
+                    quantity = (quantity and quantity > 0) and quantity or 1
+                    return math.floor(price / quantity)
+                end
+            end
+        end
+    end
+    return nil
+end
+
 -----------------------------------------------------------------------
 -- Tooltip hook: show vendor buy price on item hover
 -----------------------------------------------------------------------
@@ -89,6 +118,27 @@ local function OnTooltipSetItem(tooltip)
                 1, 0.82, 0,  -- left text color (yellow)
                 1, 1, 1   -- right text color (white)
             )
+
+            -- If you're talking to a merchant that sells this item, show your rep-adjusted price
+            local repUnitPrice = GetRepAdjustedVendorUnitPrice(itemID)
+            if repUnitPrice and repUnitPrice > 0 and repUnitPrice ~= buyPrice then
+                local rightText = FormatMoneyIcons(repUnitPrice)
+                -- Try to show discount percentage compared to base if we can infer it
+                if buyPrice and buyPrice > 0 and repUnitPrice < buyPrice then
+                    local pct = (1 - (repUnitPrice / buyPrice)) * 100
+                    -- Round to nearest 5% to match rep tiers
+                    local nearest = 5 * math.floor((pct / 5) + 0.5)
+                    if nearest > 0 then
+                        rightText = string.format("%s (-%d%%)", rightText, nearest)
+                    end
+                end
+                tooltip:AddDoubleLine(
+                    "[VA] Vendor Buy (rep):",
+                    rightText,
+                    1, 0.82, 0,
+                    0.8, 1, 0.8
+                )
+            end
         end
         if sellPrice and sellPrice > 0 then
             tooltip:AddDoubleLine(
