@@ -159,10 +159,11 @@ local SEARCH_DELAY = 0.3  -- seconds to wait after typing stops
 -- Create search result row
 -----------------------------------------------------------------------
 local function CreateSearchResultRow(parent, index)
-    local row = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
     row:SetHeight(ROW_HEIGHT)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * ROW_HEIGHT))
     row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, -((index - 1) * ROW_HEIGHT))
+    row:RegisterForClicks("LeftButtonUp")
     
     -- Background
     if index % 2 == 0 then
@@ -188,7 +189,6 @@ local function CreateSearchResultRow(parent, index)
     row.priceText:SetJustifyH("LEFT")
     
     -- Tooltip on hover
-    row:EnableMouse(true)
     row:SetScript("OnEnter", function(self)
         if self.itemID then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -198,6 +198,17 @@ local function CreateSearchResultRow(parent, index)
     end)
     row:SetScript("OnLeave", function(self)
         GameTooltip:Hide()
+    end)
+    
+    -- Shift-click to insert item link into chat
+    row:SetScript("OnClick", function(self)
+        if IsShiftKeyDown() and self.itemLink then
+            -- Open chat if not already open, then insert link
+            if not ChatEdit_GetActiveWindow() then
+                ChatFrame_OpenChat("")
+            end
+            ChatEdit_InsertLink(self.itemLink)
+        end
     end)
     
     return row
@@ -285,14 +296,15 @@ local function PerformSearch(query)
                 row.icon:SetTexture(iconTexture)
             end
             
-            -- Set name
+            -- Set name and store link for shift-click
             local _, link = GetItemInfo(r.itemID)
+            row.itemLink = link
             row.nameText:SetText(link or r.name)
             
             -- Set price info
             local priceStr = ""
             if r.buyPrice and r.buyPrice > 0 then
-                priceStr = "Buy: " .. FormatMoneyIcons(r.buyPrice)
+                priceStr = "Purchase: " .. FormatMoneyIcons(r.buyPrice)
             end
             if r.sellPrice and r.sellPrice > 0 then
                 if priceStr ~= "" then priceStr = priceStr .. "  |  " end
