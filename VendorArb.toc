@@ -8,3 +8,4 @@
 ItemDB.lua
 VendorPrices.lua
 VendorArb.lua
+MinimapButton.lua
